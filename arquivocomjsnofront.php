@@ -1,97 +1,102 @@
 <?php
 // Configuração do banco de dados
-$con = new PDO("mysql:host=localhost;dbname=banco;charset=utf8", "root", "");
-$con->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+try {
+    $con = new PDO("mysql:host=localhost;dbname=banco;charset=utf8", "root", "");
+    $con->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
-// Criação das tabelas, se necessário
-$con->exec("
-    CREATE TABLE IF NOT EXISTS agentes (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        nome VARCHAR(255) NOT NULL UNIQUE,
-        descricao TEXT,
-        imagem TEXT
-    );
-    CREATE TABLE IF NOT EXISTS mapas (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        nome VARCHAR(255) NOT NULL UNIQUE,
-        imagem TEXT
-    );
-");
+    // Criação das tabelas
+    $con->exec("
+        CREATE TABLE IF NOT EXISTS agentes (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nome VARCHAR(255) NOT NULL UNIQUE,
+            descricao TEXT,
+            imagem TEXT
+        );
+        CREATE TABLE IF NOT EXISTS mapas (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nome VARCHAR(255) NOT NULL UNIQUE,
+            imagem TEXT
+        );
+    ");
 
-// Processamento de requisições do frontend
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? null;
+    // Processamento de requisições
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $action = $_POST['action'] ?? '';
 
-    if ($action === 'importar') {
-        // Importar da API
-        $urlAgentes = "https://valorant-api.com/v1/agents";
-        $urlMapas = "https://valorant-api.com/v1/maps";
+        if ($action === 'importar') {
+            importData($con);
+        } elseif ($action === 'listar') {
+            listData($con);
+        } elseif ($action === 'atualizar') {
+            updateData($con);
+        } elseif ($action === 'excluir') {
+            deleteData($con);
+        }
+        exit; // Saia após processar a requisição
+    }
+} catch (PDOException $e) {
+    echo "Erro: " . $e->getMessage();
+}
 
-        // Importar agentes
-        $agentes = json_decode(file_get_contents($urlAgentes), true)['data'];
-        $stmtAgentes = $con->prepare("INSERT IGNORE INTO agentes (nome, descricao, imagem) VALUES (:nome, :descricao, :imagem)");
-        foreach ($agentes as $agente) {
-            $stmtAgentes->execute([
-                ':nome' => $agente['displayName'],
-                ':descricao' => $agente['description'],
-                ':imagem' => $agente['fullPortrait']
+// Funções para manipulação de dados
+function importData($con) {
+    // Limpar dados existentes
+    $con->exec("TRUNCATE TABLE agentes");
+    $con->exec("TRUNCATE TABLE mapas");
+
+    // URLs das APIs
+    $urls = [
+        'agentes' => "https://valorant-api.com/v1/agents",
+        'mapas' => "https://valorant-api.com/v1/maps"
+    ];
+
+    // Importar agentes e mapas
+    foreach ($urls as $tipo => $url) {
+        $data = json_decode(file_get_contents($url), true)['data'];
+        $stmt = $con->prepare("INSERT IGNORE INTO $tipo (nome, descricao, imagem) VALUES (:nome, :descricao, :imagem)");
+        foreach ($data as $item) {
+            $stmt->execute([
+                ':nome' => $item['displayName'],
+                ':descricao' => $item['description'] ?? '',
+                ':imagem' => $item['fullPortrait'] ?? $item['splash']
             ]);
         }
+    }
 
-        // Importar mapas
-        $mapas = json_decode(file_get_contents($urlMapas), true)['data'];
-        $stmtMapas = $con->prepare("INSERT IGNORE INTO mapas (nome, imagem) VALUES (:nome, :imagem)");
-        foreach ($mapas as $mapa) {
-            $stmtMapas->execute([
-                ':nome' => $mapa['displayName'],
-                ':imagem' => $mapa['splash']
-            ]);
-        }
+    echo json_encode(['message' => 'Dados importados com sucesso!']);
+}
 
-        echo json_encode(['message' => 'Dados importados com sucesso!']);
-        exit;
-    } elseif ($action === 'listar') {
-        // Listar agentes ou mapas
-        $type = $_POST['type'] ?? null;
-        $search = $_POST['search'] ?? '';
+function listData($con) {
+    $type = $_POST['type'] ?? '';
+    $search = $_POST['search'] ?? '';
+    $query = "SELECT * FROM $type" . ($search ? " WHERE nome LIKE :search" : "");
+    $stmt = $con->prepare($query);
+    if ($search) {
+        $stmt->execute([':search' => '%' . $search . '%']);
+    } else {
+        $stmt->execute();
+    }
+    echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+}
 
-        // Definir a consulta SQL e parâmetros de acordo com a busca
-        if ($search) {
-            $query = "SELECT * FROM $type WHERE nome LIKE :search";
-        } else {
-            $query = "SELECT * FROM $type";
-        }
+function updateData($con) {
+    $id = $_POST['id'] ?? '';
+    $novoNome = $_POST['novo_nome'] ?? '';
+    $tabela = $_POST['tabela'] ?? '';
+    if ($id && $novoNome && $tabela) {
+        $stmt = $con->prepare("UPDATE $tabela SET nome = :novo_nome WHERE id = :id");
+        $stmt->execute([':novo_nome' => $novoNome, ':id' => $id]);
+        echo json_encode(['message' => 'Registro atualizado com sucesso!']);
+    }
+}
 
-        $stmt = $con->prepare($query);
-        if ($search) {
-            $stmt->execute([':search' => '%' . $search . '%']);
-        } else {
-            $stmt->execute(); // Executar sem parâmetros
-        }
-
-        echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
-        exit;
-    } elseif ($action === 'atualizar') {
-        // Atualizar nome
-        $id = $_POST['id'] ?? null;
-        $novoNome = $_POST['novo_nome'] ?? null;
-        $tabela = $_POST['tabela'] ?? null;
-        if ($id && $novoNome && $tabela) {
-            $stmt = $con->prepare("UPDATE $tabela SET nome = :novo_nome WHERE id = :id");
-            $stmt->execute([':novo_nome' => $novoNome, ':id' => $id]);
-            echo json_encode(['message' => 'Registro atualizado com sucesso!']);
-            exit;
-        }
-    } elseif ($action === 'excluir') {
-        // Excluir registro
-        $id = $_POST['id'] ?? null;
-        $tabela = $_POST['tabela'] ?? null;
-        if ($id && $tabela) {
-            $stmt = $con->prepare("DELETE FROM $tabela WHERE id = :id");
-            $stmt->execute([':id' => $id]);
-            echo json_encode(['message' => 'Registro excluído com sucesso!']);
-            exit;
-        }
+function deleteData($con) {
+    $id = $_POST['id'] ?? '';
+    $tabela = $_POST['tabela'] ?? '';
+    if ($id && $tabela) {
+        $stmt = $con->prepare("DELETE FROM $tabela WHERE id = :id");
+        $stmt->execute([':id' => $id]);
+        echo json_encode(['message' => 'Registro excluído com sucesso!']);
     }
 }
 ?>
@@ -108,8 +113,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="container mt-5">
         <h1>Gerenciamento Valorant</h1>
         <button id="importar" class="btn btn-primary mb-4">Importar Dados da API</button>
-        
-        <!-- Campo de busca -->
         <input type="text" id="busca" placeholder="Buscar..." class="form-control mb-3">
 
         <h2>Agentes</h2>
@@ -131,12 +134,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             });
             const data = await response.json();
 
-            if (!data.length) {
-                container.innerHTML = '<p>Nenhum registro encontrado.</p>';
-                return;
-            }
-
-            container.innerHTML = data.map(item => `
+            container.innerHTML = data.length ? data.map(item => `
                 <div class="card mb-3">
                     <div class="card-body">
                         <h5>${item.nome}</h5>
@@ -146,7 +144,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <button class="btn btn-warning" onclick="atualizar(${item.id}, '${type}')">Atualizar Nome</button>
                     </div>
                 </div>
-            `).join('');
+            `).join('') : '<p>Nenhum registro encontrado.</p>';
         };
 
         const excluir = async (id, tabela) => {
@@ -156,8 +154,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: new URLSearchParams({ action: 'excluir', id, tabela })
                 });
-                const data = await response.json();
-                alert(data.message);
+                alert((await response.json()).message);
                 fetchDados(tabela, tabela);
             }
         };
@@ -170,8 +167,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: new URLSearchParams({ action: 'atualizar', id, novo_nome: novoNome, tabela })
                 });
-                const data = await response.json();
-                alert(data.message);
+                alert((await response.json()).message);
                 fetchDados(tabela, tabela);
             }
         };
